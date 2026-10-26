@@ -7,6 +7,8 @@ import org.jellyfin.androidtv.auth.model.PublicUser
 import org.jellyfin.androidtv.auth.model.Server
 import org.jellyfin.androidtv.auth.store.AuthenticationStore
 import org.jellyfin.androidtv.util.sdk.toPublicUser
+import org.jellyfin.androidtv.ssh.SshTunnelManager
+import org.jellyfin.androidtv.ssh.SshTunnelException
 import org.jellyfin.sdk.Jellyfin
 import org.jellyfin.sdk.api.client.exception.ApiClientException
 import org.jellyfin.sdk.api.client.extensions.userApi
@@ -28,6 +30,7 @@ interface ServerUserRepository {
 class ServerUserRepositoryImpl(
 	private val jellyfin: Jellyfin,
 	private val authenticationStore: AuthenticationStore,
+	private val sshTunnelManager: SshTunnelManager,
 ) : ServerUserRepository {
 	override fun getStoredServerUsers(server: Server) = authenticationStore.getUsers(server.id)
 		?.mapNotNull { (userId, userInfo) ->
@@ -46,13 +49,15 @@ class ServerUserRepositoryImpl(
 
 	override suspend fun getPublicServerUsers(server: Server): List<PublicUser> {
 		// Create a fresh API because the shared one might be authenticated for a different server
-		val api = jellyfin.createApi(server.address)
-
 		return try {
+			val api = jellyfin.createApi(sshTunnelManager.resolveApiUrl(server.address))
 			val users = withContext(Dispatchers.IO) {
 				api.userApi.getPublicUsers().content
 			}
 			users.mapNotNull(UserDto::toPublicUser)
+		} catch (err: SshTunnelException) {
+			Timber.w(err, "SSH unavailable while retrieving public users")
+			emptyList()
 		} catch (err: ApiClientException) {
 			Timber.e(err, "Unable to retrieve public users")
 
