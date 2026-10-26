@@ -1,0 +1,9 @@
+{
+  "app/src/main/java/org/jellyfin/androidtv/ssh/SshAddressResolver.kt": "5cc645ffdc8e9d69dfddb8e948e48a3eba7b7684365d736019f56bdd3fbaf079",
+  "app/src/main/java/org/jellyfin/androidtv/ssh/SshFailureClassifier.kt": "d97a208f4a016beeae38bfda9f54c36d40cd8eb8902dc50eded246a76c540b87",
+  "app/src/main/java/org/jellyfin/androidtv/ssh/DualStackSocketFactory.kt": "6bd205f814de5e583d969dfe1208d477fa34d849126b489a7779f5e498926cbd",
+  "app/src/main/java/org/jellyfin/androidtv/ssh/AaaaDnsPacket.kt": "2f5bf54bcd0d79c35f2b4c275c1210d64cdeba91d5496e52c4354ca27470fd2f",
+  "app/src/main/java/org/jellyfin/androidtv/ssh/SshTunnelManager.kt": "0d3f8aacc339e6c963d2bb745a35c4fa7f7741d96f2d11e628a4219e8142247a",
+  "app/src/main/java/org/jellyfin/androidtv/ssh/SshAddressLookup.kt": "dc3bb50c2ef3882d3730b05169070a18a6682224f868269ee4169dd04ed20cbe",
+  "app/src/main/java/org/jellyfin/androidtv/ssh/SshServerAddress.kt": "f2e1307bac7c866ff105d934d6a78c65b5f29f760de9b3a0147eb1741736a60c"
+}
