@@ -69,7 +69,6 @@ class HomeFragment : Fragment() {
 						}
 					}
 					.fillMaxSize(),
-				maxLifecycle = Lifecycle.State.RESUMED,
 				onUpdate = { fragment ->
 					rowsSupportFragment = fragment
 				}
