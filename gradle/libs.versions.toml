@@ -1,5 +1,5 @@
 [versions]
-aboutlibraries = "15.3.0"
+aboutlibraries = "15.2.0"
 accompanist = "0.37.3"
 acra = "5.14.2"
 android-compileSdk = "37"
@@ -25,17 +25,19 @@ androidx-startup = "1.2.0"
 androidx-tvprovider = "1.1.0"
 androidx-window = "1.5.1"
 androidx-work = "2.11.2"
+bouncycastle = "1.84"
 coil = "3.6.3"
 detekt = "1.23.8"
 java-jdk = "21"
 jellyfin-androidx-media = "1.9.0+1"
 jellyfin-sdk = "1.8.12"
+jsch = "2.28.7"
 koin = "4.2.2"
 koin-compose = "4.2.2"
-kotest = "6.2.6"
+kotest = "6.2.5"
 kotlin = "2.4.21"
 kotlinx-coroutines = "1.11.0"
-kotlinx-serialization = "1.12.0"
+kotlinx-serialization = "1.11.0"
 libass-android = "0.5.1"
 markwon = "4.6.2"
 mockk = "1.14.11"
@@ -53,6 +55,8 @@ kotlin-serialization = { id = "org.jetbrains.kotlin.plugin.serialization", versi
 [libraries]
 # Jellyfin
 jellyfin-sdk = { module = "org.jellyfin.sdk:jellyfin-core", version.ref = "jellyfin-sdk" }
+jsch = { group = "com.github.mwiede", name = "jsch", version.ref = "jsch" }
+bouncycastle-provider = { module = "org.bouncycastle:bcprov-jdk18on", version.ref = "bouncycastle" }
 
 # Kotlin
 kotlin-gradle = { module = "org.jetbrains.kotlin:kotlin-gradle-plugin", version.ref = "kotlin" }
