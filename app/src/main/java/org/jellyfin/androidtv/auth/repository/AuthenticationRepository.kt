@@ -28,6 +28,8 @@ import org.jellyfin.androidtv.util.apiclient.JellyfinImageSource
 import org.jellyfin.androidtv.util.apiclient.getUrl
 import org.jellyfin.androidtv.util.apiclient.primaryImage
 import org.jellyfin.androidtv.util.sdk.forUser
+import org.jellyfin.androidtv.ssh.SshTunnelManager
+import org.jellyfin.androidtv.ssh.SshTunnelException
 import org.jellyfin.sdk.Jellyfin
 import org.jellyfin.sdk.api.client.ApiClient
 import org.jellyfin.sdk.api.client.exception.ApiClientException
@@ -58,6 +60,7 @@ class AuthenticationRepositoryImpl(
 	private val userApiClient: ApiClient,
 	private val authenticationPreferences: AuthenticationPreferences,
 	private val defaultDeviceInfo: DeviceInfo,
+	private val sshTunnelManager: SshTunnelManager,
 ) : AuthenticationRepository {
 	override fun authenticate(server: Server, method: AuthenticateMethod): Flow<LoginState> {
 		return when (method) {
@@ -81,10 +84,14 @@ class AuthenticationRepositoryImpl(
 	}
 
 	private fun authenticateCredential(server: Server, username: String, password: String) = flow {
-		val api = jellyfin.createApi(server.address, deviceInfo = defaultDeviceInfo.forUser(username))
 		val result = try {
+			val api = jellyfin.createApi(sshTunnelManager.resolveApiUrl(server.address), deviceInfo = defaultDeviceInfo.forUser(username))
 			val response = api.userApi.authenticateUserByName(username, password)
 			response.content
+		} catch (err: SshTunnelException) {
+			Timber.w(err, "SSH unavailable while signing in")
+			emit(ServerUnavailableState)
+			return@flow
 		} catch (err: TimeoutException) {
 			Timber.e(err, "Failed to connect to server trying to sign in $username")
 			emit(ServerUnavailableState)
@@ -99,10 +106,14 @@ class AuthenticationRepositoryImpl(
 	}.flowOn(Dispatchers.IO)
 
 	private fun authenticateQuickConnect(server: Server, secret: String) = flow {
-		val api = jellyfin.createApi(server.address, deviceInfo = defaultDeviceInfo)
 		val result = try {
+			val api = jellyfin.createApi(sshTunnelManager.resolveApiUrl(server.address), deviceInfo = defaultDeviceInfo)
 			val response = api.userApi.authenticateWithQuickConnect(secret)
 			response.content
+		} catch (err: SshTunnelException) {
+			Timber.w(err, "SSH unavailable while signing in")
+			emit(ServerUnavailableState)
+			return@flow
 		} catch (err: TimeoutException) {
 			Timber.e(err, "Failed to connect to server")
 			emit(ServerUnavailableState)
@@ -151,6 +162,10 @@ class AuthenticationRepositoryImpl(
 			val userInfo by userApiClient.userApi.getCurrentUser()
 			authenticateFinish(server, userInfo, user.accessToken.orEmpty())
 			emit(AuthenticatedState)
+		} catch (err: SshTunnelException) {
+			Timber.w(err, "SSH unavailable while signing in")
+			emit(ServerUnavailableState)
+			return@flow
 		} catch (err: TimeoutException) {
 			Timber.e(err, "Failed to connect to server")
 			emit(ServerUnavailableState)
@@ -213,5 +228,5 @@ class AuthenticationRepositoryImpl(
 			aspectRatio = null,
 			index = null
 		)
-	}?.getUrl(jellyfin.createApi(server.address))
+	}?.getUrl(jellyfin.createApi(sshTunnelManager.currentEndpoint(server.address) ?: return null))
 }
