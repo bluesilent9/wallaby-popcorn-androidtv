@@ -11,6 +11,8 @@ import org.jellyfin.androidtv.ui.browsing.ByLetterFragment
 import org.jellyfin.androidtv.ui.browsing.CollectionFragment
 import org.jellyfin.androidtv.ui.browsing.GenericFolderFragment
 import org.jellyfin.androidtv.ui.browsing.SuggestedMoviesFragment
+import org.jellyfin.androidtv.ui.wallaby.WallabyLibraryFragment
+import org.jellyfin.sdk.model.api.CollectionType
 import org.jellyfin.androidtv.ui.home.HomeFragment
 import org.jellyfin.androidtv.ui.itemdetail.FullDetailsFragment
 import org.jellyfin.androidtv.ui.itemdetail.ItemListFragment
@@ -40,7 +42,11 @@ object Destinations {
 	// Browsing
 	// TODO only pass item id instead of complete JSON to browsing destinations
 	fun libraryBrowser(item: BaseItemDto, includeType: String? = null) =
-		fragmentDestination<BrowseGridFragment> {
+		if (item.collectionType in setOf(CollectionType.MOVIES, CollectionType.TVSHOWS)) {
+			fragmentDestination<WallabyLibraryFragment> {
+				putString(Extras.Folder, Json.encodeToString(item))
+			}
+		} else fragmentDestination<BrowseGridFragment> {
 			putString(Extras.Folder, Json.encodeToString(item))
 			putString(Extras.IncludeType, includeType)
 		}
