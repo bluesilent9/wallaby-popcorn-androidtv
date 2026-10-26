@@ -1,3 +1,19 @@
+# Wallaby Popcorn for Android TV — Development
+
+Native Android TV fork of [Jellyfin Android TV](https://github.com/jellyfin/jellyfin-androidtv), separate from the mobile, desktop and server web clients, matching upstream's repository split.
+
+Prepared for **tv-ferodale, Android 9 / API 28, ARMv7**, retaining minSdk 23 and the established `org.jellyfin.androidtv.ssh` application ID so that a matching signing certificate can update the working Jellyfin TV SSH installation without erasing its settings.
+
+- Preserves the working IPv6-first SSH tunnel, key enrolment/pinning, connection recovery and automatic login, plus the subsequently prepared defensive startup/error fixes.
+- Native Standard, Grid and List share one library query, selection, sorting/filtering and bounded page cache. Standard shows titles/year on the left and a fixed synopsis/poster/technical-details area on the right. All three layouts can browse the whole library, with no 100-item cap or batch-size UI.
+- Remote D-pad focus drives selection and artwork; OK opens item details. Right from the Standard title list focuses its details action; Left from that action returns to the selected title. Android Back uses the existing native navigation/player path.
+- Per-server, per-user, per-library view choice and selected index survive login/app restart. Server-backed native sort and favorite/unwatched preferences are reused.
+- Artwork waits for one second of stable focus, retains the last image until the next one loads, then fades. Library folders use the Wallaby cinema artwork. Playback disables browsing backgrounds; the player and its surface remain native.
+
+**Source preparation only. No APK or compiled tests have been built for this revision.** See [prebuild notes and validation checklist](docs/ANDROID_TV_DEVELOPMENT.md). This is not Stable and no release has been published. Jellyfin's version convention is retained: the previous working snapshot reported `0.0.0-dev.1`, and the next development build is `0.0.0-dev.2` (code 2).
+
+Original Jellyfin project documentation follows.
+
 <h1 align="center">Jellyfin for Android TV</h1>
 <h3 align="center">Part of the <a href="https://jellyfin.org">Jellyfin Project</a></h3>
 

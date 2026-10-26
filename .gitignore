@@ -7,3 +7,8 @@ local.properties
 .kotlin/
 build/
 captures/
+
+# Local outputs and signing settings must never be published.
+outputs/
+*.jks
+*.keystore
