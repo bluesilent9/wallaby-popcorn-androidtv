@@ -20,12 +20,14 @@ import androidx.work.await
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.distinctUntilChanged
 import kotlinx.coroutines.flow.filter
+import kotlinx.coroutines.flow.filterNotNull
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.flow.launchIn
 import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.flow.onEach
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
+import org.jellyfin.androidtv.ssh.SshTunnelManager
 import org.jellyfin.androidtv.R
 import org.jellyfin.androidtv.auth.repository.SessionRepository
 import org.jellyfin.androidtv.auth.repository.SessionRepositoryState
@@ -60,6 +62,7 @@ class StartupActivity : FragmentActivity() {
 		const val EXTRA_HIDE_SPLASH = "HideSplash"
 	}
 
+	private val sshTunnelManager: SshTunnelManager by inject()
 	private val startupViewModel: StartupViewModel by viewModel()
 	private val api: ApiClient by inject()
 	private val mediaManager: MediaManager by inject()
@@ -95,6 +98,13 @@ class StartupActivity : FragmentActivity() {
 		binding.background.setContent { AppBackground() }
 		binding.screensaver.isVisible = false
 		setContentView(binding.root)
+
+		sshTunnelManager.connectionError
+			.flowWithLifecycle(lifecycle, Lifecycle.State.RESUMED)
+			.filterNotNull()
+			.distinctUntilChanged()
+			.onEach { Toast.makeText(this, it, Toast.LENGTH_LONG).show() }
+			.launchIn(lifecycleScope)
 
 		if (!intent.getBooleanExtra(EXTRA_HIDE_SPLASH, false)) showSplash()
 
