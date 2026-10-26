@@ -53,11 +53,7 @@ public class ItemLauncher {
         switch (collectionType) {
             case MOVIES:
             case TVSHOWS:
-                LibraryPreferences displayPreferences = preferencesRepository.getValue().getLibraryPreferences(baseItem.getDisplayPreferencesId());
-                boolean enableSmartScreen = displayPreferences.get(LibraryPreferences.Companion.getEnableSmartScreen());
-
-                if (!enableSmartScreen) return Destinations.INSTANCE.libraryBrowser(baseItem, null);
-                else return Destinations.INSTANCE.librarySmartScreen(baseItem);
+                return Destinations.INSTANCE.libraryBrowser(baseItem, null);
             case MUSIC:
             case LIVETV:
                 return Destinations.INSTANCE.librarySmartScreen(baseItem);
