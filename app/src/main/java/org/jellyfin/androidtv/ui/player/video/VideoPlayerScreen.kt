@@ -32,7 +32,7 @@ fun VideoPlayerScreen() {
 
 	val backgroundService = koinInject<BackgroundService>()
 	LaunchedEffect(backgroundService) {
-		backgroundService.clearBackgrounds()
+		backgroundService.disable()
 	}
 
 	val playing by remember {
