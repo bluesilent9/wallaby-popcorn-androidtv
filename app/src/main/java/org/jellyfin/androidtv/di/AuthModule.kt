@@ -17,12 +17,12 @@ val authModule = module {
 	single { AuthenticationPreferences(get()) }
 
 	single<AuthenticationRepository> {
-		AuthenticationRepositoryImpl(get(), get(), get(), get(), get(), get(defaultDeviceInfo))
+		AuthenticationRepositoryImpl(get(), get(), get(), get(), get(), get(defaultDeviceInfo), get())
 	}
-	single<ServerRepository> { ServerRepositoryImpl(get(), get()) }
-	single<ServerUserRepository> { ServerUserRepositoryImpl(get(), get()) }
+	single<ServerRepository> { ServerRepositoryImpl(get(), get(), get()) }
+	single<ServerUserRepository> { ServerUserRepositoryImpl(get(), get(), get()) }
 	single<SessionRepository> {
-		SessionRepositoryImpl(get(), get(), get(), get(), get(defaultDeviceInfo), get(), get(), get())
+		SessionRepositoryImpl(get(), get(), get(), get(), get(defaultDeviceInfo), get(), get(), get(), get())
 	}
 
 	factory {
