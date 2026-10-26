@@ -54,6 +54,7 @@ import org.jellyfin.androidtv.ui.settings.screen.library.SettingsLibrariesScreen
 import org.jellyfin.androidtv.ui.startup.ServerAddViewModel
 import org.jellyfin.androidtv.ui.startup.StartupViewModel
 import org.jellyfin.androidtv.ui.startup.UserLoginViewModel
+import org.jellyfin.androidtv.ssh.SshTunnelManager
 import org.jellyfin.androidtv.util.AndroidVersion
 import org.jellyfin.androidtv.util.KeyProcessor
 import org.jellyfin.androidtv.util.MarkdownRenderer
@@ -77,6 +78,7 @@ import org.jellyfin.sdk.Jellyfin as JellyfinSdk
 val defaultDeviceInfo = named("defaultDeviceInfo")
 
 val appModule = module {
+	single { SshTunnelManager(androidContext()) }
 	// SDK
 	single(defaultDeviceInfo) { androidDevice(get()) }
 	single { OkHttpFactory() }
@@ -159,7 +161,7 @@ val appModule = module {
 	single { DefaultExternalPlayerApi() }
 
 	viewModel { StartupViewModel(get(), get(), get(), get()) }
-	viewModel { UserLoginViewModel(get(), get(), get(), get(defaultDeviceInfo)) }
+	viewModel { UserLoginViewModel(get(), get(), get(), get(defaultDeviceInfo), get()) }
 	viewModel { ServerAddViewModel(get()) }
 	viewModel { NextUpViewModel(get(), get(), get()) }
 	viewModel { StillWatchingViewModel(get(), get(), get(), get()) }
@@ -169,7 +171,7 @@ val appModule = module {
 	viewModel { SettingsViewModel() }
 	viewModel { SettingsLibrariesScreenViewModel(get()) }
 
-	single { BackgroundService(get(), get(), get(), get(), get()) }
+	single { BackgroundService(get(), get(), get(), get(), get(), get()) }
 
 	single { MarkdownRenderer(get()) }
 	single { ItemLauncher() }
