@@ -17,6 +17,8 @@ import org.jellyfin.androidtv.auth.model.ServerAdditionState
 import org.jellyfin.androidtv.auth.model.UnableToConnectState
 import org.jellyfin.androidtv.auth.store.AuthenticationStore
 import org.jellyfin.androidtv.util.sdk.toServer
+import org.jellyfin.androidtv.ssh.SshServerAddress
+import org.jellyfin.androidtv.ssh.SshTunnelManager
 import org.jellyfin.sdk.Jellyfin
 import org.jellyfin.sdk.api.client.ApiClient
 import org.jellyfin.sdk.api.client.exception.ApiClientException
@@ -62,6 +64,7 @@ interface ServerRepository {
 class ServerRepositoryImpl(
 	private val jellyfin: Jellyfin,
 	private val authenticationStore: AuthenticationStore,
+	private val sshTunnelManager: SshTunnelManager,
 ) : ServerRepository {
 	// State
 	private val _storedServers = MutableStateFlow(emptyList<Server>())
@@ -100,10 +103,12 @@ class ServerRepositoryImpl(
 	// Mutating data
 	override fun addServer(address: String): Flow<ServerAdditionState> = flow {
 		Timber.i("Adding server %s", address)
+		val sshAddress = SshServerAddress.parse(address)
+		val resolvedAddress = if (sshAddress != null) sshTunnelManager.resolveApiUrl(address) else address
 
 		emit(ConnectingState(address))
 
-		val addressCandidates = jellyfin.discovery.getAddressCandidates(address)
+		val addressCandidates = jellyfin.discovery.getAddressCandidates(resolvedAddress)
 		Timber.i("Found ${addressCandidates.size} candidates")
 
 		val goodRecommendations = mutableListOf<RecommendedServerInfo>()
@@ -147,7 +152,7 @@ class ServerRepositoryImpl(
 
 			val server = authenticationStore.getServer(id)?.copy(
 				name = systemInfo.serverName ?: "Jellyfin Server",
-				address = chosenRecommendation.address,
+				address = sshAddress?.profileAddress() ?: chosenRecommendation.address,
 				version = systemInfo.version,
 				loginDisclaimer = branding.loginDisclaimer,
 				splashscreenEnabled = branding.splashscreenEnabled,
@@ -155,7 +160,7 @@ class ServerRepositoryImpl(
 				lastUsed = Instant.now().toEpochMilli()
 			) ?: AuthenticationStoreServer(
 				name = systemInfo.serverName ?: "Jellyfin Server",
-				address = chosenRecommendation.address,
+				address = sshAddress?.profileAddress() ?: chosenRecommendation.address,
 				version = systemInfo.version,
 				loginDisclaimer = branding.loginDisclaimer,
 				splashscreenEnabled = branding.splashscreenEnabled,
@@ -177,6 +182,12 @@ class ServerRepositoryImpl(
 
 	override suspend fun getServer(id: UUID, eagerUpdate: Boolean): Server? {
 		val server = authenticationStore.getServer(id) ?: return null
+		try {
+			sshTunnelManager.resolveApiUrl(server.address)
+		} catch (err: Exception) {
+			Timber.e(err, "Unable to establish SSH tunnel for server")
+			return null
+		}
 
 		val updatedServer = try {
 			val forceUpdate = eagerUpdate && server.version
@@ -184,7 +195,7 @@ class ServerRepositoryImpl(
 				?.let { version -> version < ServerRepository.minimumServerVersion } == true
 
 			updateServerInternal(id, server, forceUpdate)
-		} catch (err: ApiClientException) {
+		} catch (err: Exception) {
 			Timber.e(err, "Unable to update server")
 			null
 		}
@@ -198,7 +209,7 @@ class ServerRepositoryImpl(
 
 		return try {
 			updateServerInternal(server.id, serverInfo, force) != null
-		} catch (err: ApiClientException) {
+		} catch (err: Exception) {
 			Timber.e(err, "Unable to update server")
 
 			false
@@ -216,7 +227,7 @@ class ServerRepositoryImpl(
 		if (now - server.lastRefreshed < 600000 && server.version != null && !forceUpdate) return null
 
 		val newServer = withContext(Dispatchers.IO) {
-			val api = jellyfin.createApi(server.address)
+			val api = jellyfin.createApi(sshTunnelManager.resolveApiUrl(server.address))
 
 			// Get login disclaimer
 			val branding = api.getBrandingOptionsOrDefault()
