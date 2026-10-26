@@ -1,4 +1,1 @@
-<layer-list xmlns:android="http://schemas.android.com/apk/res/android">
-    <item android:drawable="@drawable/app_banner_background" />
-    <item android:drawable="@drawable/app_banner_foreground" />
-</layer-list>
+<layer-list xmlns:android="http://schemas.android.com/apk/res/android"><item><bitmap android:src="@drawable/wallaby_cinema" android:gravity="fill" /></item><item android:width="140dp" android:height="140dp" android:gravity="center"><bitmap android:src="@drawable/wallaby_mark" android:gravity="fill" /></item></layer-list>
