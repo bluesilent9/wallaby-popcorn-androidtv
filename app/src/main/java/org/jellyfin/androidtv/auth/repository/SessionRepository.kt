@@ -2,6 +2,7 @@ package org.jellyfin.androidtv.auth.repository
 
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.NonCancellable
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
@@ -11,6 +12,9 @@ import kotlinx.coroutines.withContext
 import org.jellyfin.androidtv.auth.model.Server
 import org.jellyfin.androidtv.auth.store.AuthenticationPreferences
 import org.jellyfin.androidtv.auth.store.AuthenticationStore
+import org.jellyfin.androidtv.ssh.SshTunnelManager
+import org.jellyfin.androidtv.ssh.SshTunnelException
+import org.jellyfin.androidtv.ssh.SshServerAddress
 import org.jellyfin.androidtv.preference.PreferencesRepository
 import org.jellyfin.androidtv.preference.TelemetryPreferences
 import org.jellyfin.androidtv.preference.constant.UserSelectBehavior.DISABLED
@@ -56,11 +60,17 @@ class SessionRepositoryImpl(
 	private val userRepository: UserRepository,
 	private val serverRepository: ServerRepository,
 	private val telemetryPreferences: TelemetryPreferences,
+	private val sshTunnelManager: SshTunnelManager,
 ) : SessionRepository {
+	private companion object {
+		const val SSH_RESTORE_ATTEMPTS = 4
+		const val SSH_RESTORE_RETRY_DELAY_MS = 2_000L
+	}
+
 	private val currentSessionMutex = Mutex()
 	private val _currentSession = MutableStateFlow<Session?>(null)
 	override val currentSession = _currentSession.asStateFlow()
-	private val _state = MutableStateFlow(SessionRepositoryState.READY)
+	private val _state = MutableStateFlow(SessionRepositoryState.RESTORING_SESSION)
 	override val state = _state.asStateFlow()
 
 	override suspend fun restoreSession(destroyOnly: Boolean): Unit = withContext(NonCancellable) {
@@ -75,15 +85,35 @@ class SessionRepositoryImpl(
 			when {
 				alwaysAuthenticate -> destroyCurrentSession()
 				autoLoginBehavior == DISABLED -> destroyCurrentSession()
-				autoLoginBehavior == LAST_USER && !destroyOnly -> setCurrentSession(createLastUserSession())
+				autoLoginBehavior == LAST_USER && !destroyOnly -> restoreAutomatically(createLastUserSession())
 				autoLoginBehavior == SPECIFIC_USER && !destroyOnly -> {
 					val serverId = authenticationPreferences[AuthenticationPreferences.autoLoginServerId].toUUIDOrNull()
 					val userId = authenticationPreferences[AuthenticationPreferences.autoLoginUserId].toUUIDOrNull()
-					if (serverId != null && userId != null) setCurrentSession(createUserSession(serverId, userId))
+					if (serverId != null && userId != null) restoreAutomatically(createUserSession(serverId, userId))
 				}
 			}
 
 			_state.value = SessionRepositoryState.READY
+		}
+	}
+
+	private suspend fun restoreAutomatically(session: Session?) {
+		if (session == null) return
+
+		val server = authenticationStore.getServer(session.serverId)
+		val sshAddress = server?.takeIf { SshServerAddress.parse(it.address) != null }
+		val attempts = if (sshAddress != null) SSH_RESTORE_ATTEMPTS else 1
+		for (attempt in 0 until attempts) {
+			_state.value = SessionRepositoryState.RESTORING_SESSION
+			val restored = try {
+				if (sshAddress != null) sshTunnelManager.resolveApiUrl(sshAddress.address)
+				setCurrentSession(session, restoring = true)
+			} catch (exception: Exception) {
+				Timber.w(exception, "Automatic sign-in restore failed (attempt ${attempt + 1}/$attempts)")
+				false
+			}
+			if (restored) return
+			if (attempt < attempts - 1) delay(SSH_RESTORE_RETRY_DELAY_MS)
 		}
 	}
 
@@ -104,21 +134,30 @@ class SessionRepositoryImpl(
 			return false
 		}
 
-		val switched = setCurrentSession(session)
-		_state.value = SessionRepositoryState.READY
-		return switched
+		return try {
+			setCurrentSession(session)
+		} catch (error: SshTunnelException) {
+			Timber.w(error, "SSH unavailable while switching session")
+			false
+		} finally {
+			_state.value = SessionRepositoryState.READY
+		}
 	}
 
 	override fun destroyCurrentSession() {
+		destroyCurrentSession(updateState = true)
+	}
+
+	private fun destroyCurrentSession(updateState: Boolean) {
 		Timber.i("Destroying current session")
 
 		userRepository.setCurrentUser(null)
 		serverRepository.setCurrentServer(null)
 		_currentSession.value = null
-		_state.value = SessionRepositoryState.READY
+		if (updateState) _state.value = SessionRepositoryState.READY
 	}
 
-	private suspend fun setCurrentSession(session: Session?): Boolean {
+	private suspend fun setCurrentSession(session: Session?, restoring: Boolean = false): Boolean {
 		var server: Server? = null
 
 		if (session != null) {
@@ -138,7 +177,8 @@ class SessionRepositoryImpl(
 		val deviceInfo = session?.let { defaultDeviceInfo.forUser(it.userId) } ?: defaultDeviceInfo
 		Timber.i("Updating current session. userId=${session?.userId} server=${server?.serverVersion}")
 
-		val applied = userApiClient.applySession(session, deviceInfo)
+		val baseUrl = server?.address?.let { sshTunnelManager.resolveApiUrl(it) }
+		val applied = userApiClient.applySession(session, deviceInfo, baseUrl)
 		if (applied && session != null) {
 			try {
 				val user = withContext(Dispatchers.IO) {
@@ -148,7 +188,7 @@ class SessionRepositoryImpl(
 				serverRepository.setCurrentServer(server)
 			} catch (err: ApiClientException) {
 				Timber.e(err, "Unable to authenticate: bad response when getting user info")
-				destroyCurrentSession()
+				destroyCurrentSession(updateState = !restoring)
 				return false
 			}
 
@@ -185,7 +225,11 @@ class SessionRepositoryImpl(
 		)
 	}
 
-	private fun ApiClient.applySession(session: Session?, newDeviceInfo: DeviceInfo = defaultDeviceInfo): Boolean {
+	private fun ApiClient.applySession(
+		session: Session?,
+		newDeviceInfo: DeviceInfo = defaultDeviceInfo,
+		resolvedBaseUrl: String? = null,
+	): Boolean {
 		if (session == null) {
 			update(
 				baseUrl = null,
@@ -197,7 +241,7 @@ class SessionRepositoryImpl(
 				?: return false
 
 			update(
-				baseUrl = server.address,
+				baseUrl = resolvedBaseUrl ?: server.address,
 				accessToken = session.accessToken,
 				deviceInfo = newDeviceInfo,
 			)
