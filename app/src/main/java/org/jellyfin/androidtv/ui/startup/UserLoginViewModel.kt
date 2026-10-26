@@ -26,6 +26,8 @@ import org.jellyfin.androidtv.auth.model.UnknownQuickConnectState
 import org.jellyfin.androidtv.auth.model.User
 import org.jellyfin.androidtv.auth.repository.AuthenticationRepository
 import org.jellyfin.androidtv.auth.repository.ServerRepository
+import org.jellyfin.androidtv.ssh.SshTunnelManager
+import org.jellyfin.androidtv.ssh.SshTunnelException
 import org.jellyfin.androidtv.util.sdk.forUser
 import org.jellyfin.sdk.Jellyfin
 import org.jellyfin.sdk.api.client.exception.ApiClientException
@@ -40,6 +42,7 @@ class UserLoginViewModel(
 	private val serverRepository: ServerRepository,
 	private val authenticationRepository: AuthenticationRepository,
 	private val defaultDeviceInfo: DeviceInfo,
+	private val sshTunnelManager: SshTunnelManager,
 ) : ViewModel() {
 	private val _loginState = MutableStateFlow<LoginState?>(null)
 	val loginState = _loginState.asStateFlow()
@@ -83,7 +86,7 @@ class UserLoginViewModel(
 		try {
 			val response = withContext(Dispatchers.IO) {
 				quickConnectApi.update(
-					baseUrl = server.address,
+					baseUrl = sshTunnelManager.resolveApiUrl(server.address),
 					deviceInfo = defaultDeviceInfo.forUser(UUID.randomUUID()),
 				)
 
@@ -92,6 +95,10 @@ class UserLoginViewModel(
 
 			quickConnectSecret = response.secret
 			_quickConnectState.emit(PendingQuickConnectState(response.code))
+		} catch (err: SshTunnelException) {
+			Timber.w(err, "SSH unavailable for QuickConnect")
+			_quickConnectState.emit(UnavailableQuickConnectState)
+			return
 		} catch (err: ApiClientException) {
 			Timber.e(err, "Unable to initiate QuickConnect")
 			_quickConnectState.emit(UnavailableQuickConnectState)
@@ -132,6 +139,10 @@ class UserLoginViewModel(
 				_quickConnectState.emit(PendingQuickConnectState(state.code))
 				return true
 			}
+		} catch (err: SshTunnelException) {
+			Timber.w(err, "SSH unavailable for QuickConnect")
+			_quickConnectState.emit(UnavailableQuickConnectState)
+			return false
 		} catch (err: ApiClientException) {
 			Timber.e(err, "Unable to initiate QuickConnect")
 			_quickConnectState.emit(UnavailableQuickConnectState)
