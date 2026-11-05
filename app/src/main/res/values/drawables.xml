@@ -1,0 +1,5 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <!-- Compose painterResource requires the PNG itself, not an XML bitmap wrapper. -->
+    <item name="app_logo" type="drawable">@drawable/wallaby_mark</item>
+</resources>

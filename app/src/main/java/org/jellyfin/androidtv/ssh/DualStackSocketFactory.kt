@@ -2,8 +2,6 @@ package org.jellyfin.androidtv.ssh
 
 import com.jcraft.jsch.SocketFactory
 import java.io.IOException
-import java.net.Inet4Address
-import java.net.Inet6Address
 import java.net.InetAddress
 import java.net.InetSocketAddress
 import java.net.Socket
@@ -16,13 +14,7 @@ internal class DualStackSocketFactory(
     private val newSocket: () -> Socket = ::Socket,
 ) : SocketFactory {
     override fun createSocket(host: String, port: Int): Socket {
-        val addresses = resolve(host).distinct().sortedBy {
-            when (it) {
-                is Inet6Address -> 0
-                is Inet4Address -> 1
-                else -> 2
-            }
-        }
+        val addresses = orderedSshAddresses(resolve(host).asIterable())
         if (addresses.isEmpty()) throw UnknownHostException("No addresses found for $host")
         var lastFailure: IOException? = null
         for (address in addresses) {

@@ -3,6 +3,7 @@ package org.jellyfin.androidtv.ui.wallaby
 import android.app.AlertDialog
 import android.graphics.Color
 import android.graphics.Typeface
+import android.graphics.Rect
 import android.graphics.drawable.GradientDrawable
 import android.graphics.drawable.StateListDrawable
 import android.os.Bundle
@@ -18,17 +19,22 @@ import android.widget.LinearLayout
 import android.widget.ScrollView
 import android.widget.TextView
 import androidx.core.view.setPadding
+import androidx.core.view.doOnNextLayout
 import androidx.fragment.app.Fragment
 import androidx.lifecycle.lifecycleScope
 import androidx.recyclerview.widget.GridLayoutManager
 import androidx.recyclerview.widget.LinearLayoutManager
 import androidx.recyclerview.widget.RecyclerView
 import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.CoroutineStart
+import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
 import kotlinx.serialization.json.Json
 import org.jellyfin.androidtv.auth.repository.SessionRepository
+import org.jellyfin.androidtv.R
 import org.jellyfin.androidtv.constant.Extras
 import org.jellyfin.androidtv.data.repository.ItemRepository
 import org.jellyfin.androidtv.data.service.BackgroundService
@@ -45,15 +51,17 @@ import org.jellyfin.sdk.api.client.ApiClient
 import org.jellyfin.sdk.api.client.extensions.itemsApi
 import org.jellyfin.sdk.api.client.extensions.userLibraryApi
 import org.jellyfin.sdk.model.api.BaseItemDto
+import org.jellyfin.sdk.model.api.BaseItemKind
 import org.jellyfin.sdk.model.api.ItemFilter
 import org.jellyfin.sdk.model.api.ItemSortBy
 import org.jellyfin.sdk.model.api.MediaStreamType
 import org.jellyfin.sdk.model.api.SortOrder
 import org.koin.android.ext.android.inject
 import java.util.Locale
+import timber.log.Timber
 
 /** Native TV library: one query, cache, selection and view preference for all three layouts. */
-class WallabyLibraryFragment : Fragment() {
+class WallabyLibraryFragment : Fragment(), View.OnKeyListener {
 	private val api by inject<ApiClient>()
 	private val navigation by inject<NavigationRepository>()
 	private val backgrounds by inject<BackgroundService>()
@@ -77,6 +85,8 @@ class WallabyLibraryFragment : Fragment() {
 	private var viewMode = LibraryView.STANDARD
 	private var letter: String? = null
 	private var richItem: BaseItemDto? = null
+	private var technicalItem: BaseItemDto? = null
+	private var toolbarControls: List<View> = emptyList()
 	private var shownItem: java.util.UUID? = null
 	private var restoreFocus = true
 	private var savedScroll: android.os.Parcelable? = null
@@ -115,7 +125,8 @@ class WallabyLibraryFragment : Fragment() {
 		favoriteButton = control("Favorites") { toggleFilter(LibraryPreferences.filterFavoritesOnly) }
 		unwatchedButton = control("Unwatched") { toggleFilter(LibraryPreferences.filterUnwatchedOnly) }
 		val letters = control("A–Z") { chooseLetter() }
-		listOf(viewButton, sortButton, favoriteButton, unwatchedButton, letters).forEach { toolbar.addView(it) }
+		toolbarControls = listOf(viewButton, sortButton, favoriteButton, unwatchedButton, letters)
+		toolbarControls.forEach { toolbar.addView(it) }
 		root.addView(toolbar)
 		status = label("", 14f)
 		root.addView(status)
@@ -176,10 +187,12 @@ class WallabyLibraryFragment : Fragment() {
 		requests.values.toList().forEach { it.cancel() }
 		requests.clear()
 		detailJob?.cancel()
+		shownItem = null
 		list.adapter = null
 		list.recycledViewPool.clear()
 		panel.removeAllViews()
 		rows = null
+		toolbarControls = emptyList()
 		super.onDestroyView()
 	}
 
@@ -193,6 +206,7 @@ class WallabyLibraryFragment : Fragment() {
 		list.layoutManager?.onRestoreInstanceState(savedScroll)
 		list.scrollToPosition(selected)
 		viewButton.text = viewMode.title
+		list.post { if (view != null) centerSelectedTitle() }
 	}
 
 	private fun chooseView() {
@@ -238,6 +252,7 @@ class WallabyLibraryFragment : Fragment() {
 		window.clear()
 		selected = 0
 		richItem = null
+		technicalItem = null
 		shownItem = null
 		restoreFocus = true
 		panel.removeAllViews()
@@ -278,10 +293,12 @@ class WallabyLibraryFragment : Fragment() {
 				if (libraryPrefs[LibraryPreferences.filterUnwatchedOnly]) add(ItemFilter.IS_UNPLAYED)
 			},
 		)
-		requests[page] = viewLifecycleOwner.lifecycleScope.launch {
+		val job = viewLifecycleOwner.lifecycleScope.launch(start = CoroutineStart.LAZY) {
 			var succeeded = false
 			try {
-				val result = api.itemsApi.getItems(request).content
+				// This SDK reads the response body after resuming its caller. A library
+				// response can require more socket reads, so decoding must stay off Main.
+				val result = withContext(Dispatchers.IO) { api.itemsApi.getItems(request).content }
 				if (ticket != generation) return@launch
 				val previousTotal = window.total
 				window.put(page, result.items.orEmpty(), result.totalRecordCount ?: 0, selected)
@@ -301,9 +318,10 @@ class WallabyLibraryFragment : Fragment() {
 				}
 			} catch (cancel: CancellationException) {
 				throw cancel
-			} catch (_: Exception) {
+			} catch (error: Exception) {
+				Timber.w(error, "Library page %d failed to load or render", page)
 				if (ticket == generation) {
-					status.text = "Could not load titles. Check the server/SSH connection, then retry."
+					status.text = libraryLoadFailureMessage(error)
 					retryButton.visibility = View.VISIBLE
 				}
 			} finally {
@@ -313,30 +331,105 @@ class WallabyLibraryFragment : Fragment() {
 				}
 			}
 		}
+		// Register before starting, including immediate local failures and cached responses.
+		requests[page] = job
+		job.start()
 	}
 
 	private fun focusSelection() {
 		val holder = list.findViewHolderForAdapterPosition(selected)
 		if (holder != null) { holder.itemView.requestFocus(); restoreFocus = false }
+		else if (restoreFocus) list.doOnNextLayout {
+			if (view != null && restoreFocus) {
+				list.findViewHolderForAdapterPosition(selected)?.itemView?.let { row ->
+					row.requestFocus()
+					restoreFocus = false
+				}
+			}
+		}
+	}
+
+	private fun centerSelectedTitle() {
+		if (viewMode != LibraryView.STANDARD || window.total <= 0 || list.height <= 0) return
+		val manager = list.layoutManager as? LinearLayoutManager ?: return
+		val viewport = list.height - list.paddingTop - list.paddingBottom
+		val rowHeight = dp(54) + 2 * dp(3)
+		val frame = Rect()
+		list.getWindowVisibleDisplayFrame(frame)
+		val location = IntArray(2)
+		list.getLocationOnScreen(location)
+		val preferredTop = frame.centerY() - location[1] - list.paddingTop - rowHeight / 2
+		val offset = standardTitleOffset(selected, window.total, rowHeight, viewport, preferredTop)
+		list.stopScroll()
+		manager.scrollToPositionWithOffset(selected, offset)
+	}
+
+	private fun View?.isWithin(container: View): Boolean =
+		generateSequence(this) { it.parent as? View }.any { it === container }
+
+	/** MainActivity forwards remote keys here before Android's spatial focus search. */
+	override fun onKey(focused: View?, keyCode: Int, event: KeyEvent?): Boolean {
+		if (viewMode != LibraryView.STANDARD || !isResumed || view?.isShown != true || event == null) return false
+		if (keyCode !in setOf(KeyEvent.KEYCODE_DPAD_UP, KeyEvent.KEYCODE_DPAD_DOWN, KeyEvent.KEYCODE_DPAD_LEFT, KeyEvent.KEYCODE_DPAD_RIGHT)) return false
+		// Consume releases too, so Android cannot move focus out of the title column.
+		if (event.action != KeyEvent.ACTION_DOWN) return true
+		if (keyCode == KeyEvent.KEYCODE_DPAD_UP || keyCode == KeyEvent.KEYCODE_DPAD_DOWN) {
+			if (focused.isWithin(list) && window.total > 0) {
+				val direction = if (keyCode == KeyEvent.KEYCODE_DPAD_UP) -1 else 1
+				val next = (selected + direction).coerceIn(0, window.total - 1)
+				restoreFocus = true
+				select(next)
+				loadNear(next)
+				list.post { if (view != null) focusSelection() }
+			}
+			return true
+		}
+		val targets = toolbarControls.filter { it.isShown && it.isEnabled }.toMutableList()
+		if (retryButton.isShown) targets.add(retryButton)
+		if (window.total > 0) targets.add(list)
+		panel.findViewWithTag<View>("details-action")?.takeIf { it.isShown }?.let(targets::add)
+		if (targets.isEmpty()) return true
+		val current = targets.indexOfFirst { focused.isWithin(it) }
+		val step = if (keyCode == KeyEvent.KEYCODE_DPAD_RIGHT) 1 else -1
+		val target = if (current < 0) targets.first() else targets[(current + step + targets.size) % targets.size]
+		if (target === list) {
+			restoreFocus = true
+			centerSelectedTitle()
+			list.post { if (view != null) focusSelection() }
+		} else target.requestFocus()
+		return true
 	}
 
 	private fun select(position: Int) {
 		selected = position
+		centerSelectedTitle()
 		val item = window[position] ?: run { loadNear(position); return }
 		if (shownItem == item.id) return
 		shownItem = item.id
 		richItem = item
+		technicalItem = null
 		backgrounds.setBackground(item)
 		detailJob?.cancel()
 		renderDetails(item)
 		detailJob = viewLifecycleOwner.lifecycleScope.launch {
 			delay(180)
 			try {
-				val full = api.userLibraryApi.getItem(item.id).content
-				if (shownItem == full.id) { richItem = full; renderDetails(full) }
+				val full = withContext(Dispatchers.IO) { api.userLibraryApi.getItem(item.id).content }
+				if (shownItem != full.id) return@launch
+				richItem = full
+				renderDetails(full)
+				if (full.type == BaseItemKind.SERIES) {
+					val episode = withContext(Dispatchers.IO) {
+						api.itemsApi.getItems(firstEpisodeRequest(full.id)).content.items.firstOrNull()
+					}
+					if (shownItem == full.id) { technicalItem = episode; renderDetails(full) }
+				}
 			} catch (cancel: CancellationException) {
 				throw cancel
-			} catch (_: Exception) { /* Keep summary visible; details remain accessible on retry. */ }
+			} catch (error: Exception) {
+				Timber.w(error, "Selected library item details could not be loaded")
+				// Keep the summary visible; the native details screen remains available.
+			}
 		}
 	}
 
@@ -358,8 +451,9 @@ class WallabyLibraryFragment : Fragment() {
 			load(item.itemImages[ImageType.PRIMARY]?.getUrl(api, maxHeight = 600))
 		}, LinearLayout.LayoutParams(dp(112), dp(170)).apply { marginStart = dp(14) })
 		panel.addView(heading)
-		val source = item.mediaSources?.firstOrNull()
-		val streams = source?.mediaStreams ?: item.mediaStreams.orEmpty()
+		val media = if (item.type == BaseItemKind.SERIES) technicalItem else item
+		val source = media?.mediaSources?.firstOrNull()
+		val streams = source?.mediaStreams ?: media?.mediaStreams.orEmpty()
 		val video = streams.firstOrNull { it.type == MediaStreamType.VIDEO }
 		val audio = streams.firstOrNull { it.type == MediaStreamType.AUDIO && it.index == source?.defaultAudioStreamIndex }
 			?: streams.firstOrNull { it.type == MediaStreamType.AUDIO && it.isDefault }
@@ -374,7 +468,17 @@ class WallabyLibraryFragment : Fragment() {
 		}
 		val channels = when (audio?.channels) { 1 -> "Mono"; 2 -> "Stereo"; 6 -> "5.1 Surround"; 8 -> "7.1 Surround"; else -> audio?.channelLayout.orEmpty() }
 		val badges = LinearLayout(requireContext())
-		badges.addView(badge("▣ $resolution · ${codec(video?.codec)}"))
+		val videoBadge = LinearLayout(requireContext()).apply {
+			gravity = Gravity.CENTER_VERTICAL
+			setPadding(dp(9))
+			background = rounded(0xB0160D22.toInt())
+			addView(ImageView(context).apply { setImageResource(R.drawable.ic_wallaby_monitor); importantForAccessibility = View.IMPORTANT_FOR_ACCESSIBILITY_NO }, LinearLayout.LayoutParams(dp(24), dp(24)))
+			addView(label("$resolution · ${codec(video?.codec)}", 14f).apply { setPadding(dp(7), 0, 0, 0) })
+		}
+		if (item.type == BaseItemKind.SERIES && media != null) {
+			panel.addView(label("First episode: ${media.name.orEmpty()}", 13f))
+		}
+		badges.addView(videoBadge)
 		val quality = listOfNotNull(audio?.bitRate?.let { "${it / 1000} kb/s" }, audio?.sampleRate?.let { "${it / 1000} kHz" }).joinToString(" · ")
 		badges.addView(badge("♫ ${codec(audio?.codec)} · $channels\n$quality"))
 		panel.addView(badges)
@@ -386,11 +490,7 @@ class WallabyLibraryFragment : Fragment() {
 		panel.addView(subtitleRow)
 		// SDK 1.8.12 does not expose original-language metadata. Never substitute file/metadata-UI language.
 		panel.addView(label("Original language: Not provided by server", 14f))
-		panel.addView(control("Open details & playback") { navigation.navigate(Destinations.itemDetails(item.id)) }.apply {
-			setOnKeyListener { _, key, event ->
-				if (event.action == KeyEvent.ACTION_DOWN && key == KeyEvent.KEYCODE_DPAD_LEFT) { focusSelection(); true } else false
-			}
-		})
+		panel.addView(control("Open details & playback") { navigation.navigate(Destinations.itemDetails(item.id)) })
 		if (restoreAction) panel.findViewWithTag<View>("details-action")?.requestFocus()
 	}
 
@@ -434,13 +534,6 @@ class WallabyLibraryFragment : Fragment() {
 				if (position == RecyclerView.NO_POSITION) return@setOnClickListener
 				val current = window[position]
 				if (current != null) navigation.navigate(Destinations.itemDetails(current.id))
-			}
-			holder.itemView.setOnKeyListener { _, key, event ->
-				if (event.action == KeyEvent.ACTION_DOWN && viewMode == LibraryView.STANDARD) when (key) {
-					KeyEvent.KEYCODE_DPAD_RIGHT -> { panel.findViewWithTag<View>("details-action")?.requestFocus(); true }
-					KeyEvent.KEYCODE_DPAD_LEFT -> { viewButton.requestFocus(); true }
-					else -> false
-				} else false
 			}
 		}
 	}

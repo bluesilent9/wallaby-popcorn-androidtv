@@ -16,7 +16,7 @@ interface NavigationRepository {
 	 *
 	 * @see NavigationAction
 	 */
-	val currentAction: SharedFlow<NavigationAction>
+	val currentAction: SharedFlow<NavigationEvent>
 
 	/**
 	 * Navigate to [destination].
@@ -64,7 +64,7 @@ class NavigationRepositoryImpl(
 ) : NavigationRepository {
 	private val fragmentHistory = Stack<Destination.Fragment>()
 
-	private val _currentAction = MutableSharedFlow<NavigationAction>(1, onBufferOverflow = BufferOverflow.DROP_OLDEST)
+	private val _currentAction = MutableSharedFlow<NavigationEvent>(1, onBufferOverflow = BufferOverflow.DROP_OLDEST)
 	override val currentAction = _currentAction.asSharedFlow()
 
 	override fun navigate(destination: Destination, replace: Boolean) {
@@ -76,7 +76,7 @@ class NavigationRepositoryImpl(
 			if (replace && fragmentHistory.isNotEmpty()) fragmentHistory[fragmentHistory.lastIndex] = destination
 			else fragmentHistory.push(destination)
 		}
-		_currentAction.tryEmit(action)
+		_currentAction.tryEmit(NavigationEvent(action))
 	}
 
 	override val canGoBack: Boolean get() = fragmentHistory.isNotEmpty()
@@ -86,14 +86,14 @@ class NavigationRepositoryImpl(
 
 		Timber.i("Navigating back")
 		fragmentHistory.pop()
-		_currentAction.tryEmit(NavigationAction.GoBack)
+		_currentAction.tryEmit(NavigationEvent(NavigationAction.GoBack))
 		return true
 	}
 
 	override fun reset(destination: Destination.Fragment?, clearHistory: Boolean) {
 		fragmentHistory.clear()
 		val actualDestination = destination ?: defaultDestination
-		_currentAction.tryEmit(NavigationAction.NavigateFragment(actualDestination, true, false, clearHistory))
+		_currentAction.tryEmit(NavigationEvent(NavigationAction.NavigateFragment(actualDestination, true, false, clearHistory)))
 		Timber.i("Navigating to $actualDestination (via reset, clearHistory=$clearHistory)")
 	}
 }

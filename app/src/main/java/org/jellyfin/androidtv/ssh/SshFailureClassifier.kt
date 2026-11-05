@@ -21,9 +21,9 @@ internal fun classifySshFailure(
         causes.any { it is UnknownHostException } -> SshFailure.DNS to
             "Could not resolve the SSH host name. Check the spelling, DNS, and network connection."
         causes.any { it is NoRouteToHostException } || message.contains("ENETUNREACH", true) || message.contains("EHOSTUNREACH", true) -> SshFailure.NETWORK_UNREACHABLE to
-            "No network route to the SSH server. Check Wi-Fi/mobile data and IPv6 connectivity."
+            "No usable route to the SSH server over the available IPv6/IPv4 addresses. Check Wi-Fi/mobile data and server reachability."
         causes.any { it is SocketTimeoutException } || message.contains("timeout", true) || message.contains("timed out", true) -> SshFailure.TIMEOUT to
-            "The SSH connection timed out. Check server availability, IPv6 connectivity, and firewall rules."
+            "The SSH connection timed out on the available IPv6/IPv4 addresses. Check server availability and firewall rules."
         message.contains("ECONNREFUSED", true) || message.contains("connection refused", true) -> SshFailure.CONNECTION_REFUSED to
             "The SSH connection was refused. Check the host, port, and whether SSH is running on the server."
         causes.any { it is ConnectException } -> SshFailure.UNKNOWN to
@@ -41,7 +41,7 @@ internal fun classifySshFailure(
         causes.any { it is SocketException } -> SshFailure.CONNECTION_LOST to
             "The SSH connection was interrupted. Check the network and retry; the server may have closed the connection."
         connected -> SshFailure.JELLYFIN_UNAVAILABLE to
-            "SSH connected, but Jellyfin could not be reached through the tunnel. Check Jellyfin on server port 8096 and forwarding permissions."
+            "SSH connected, but Jellyfin could not be reached through the tunnel. Check the server's IPv6 loopback listener and SSH permission to forward to [::1]:8096."
         causes.any { it is JSchException } -> SshFailure.SSH_HANDSHAKE_FAILED to
             "SSH negotiation did not complete. Check that the selected port runs SSH and that client and server are compatible."
         else -> SshFailure.UNKNOWN to

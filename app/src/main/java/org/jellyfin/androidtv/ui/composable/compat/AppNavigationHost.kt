@@ -10,10 +10,12 @@ import androidx.compose.runtime.getValue
 import androidx.compose.runtime.remember
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.viewinterop.AndroidView
+import androidx.lifecycle.Lifecycle
+import androidx.lifecycle.compose.LocalLifecycleOwner
+import androidx.lifecycle.flowWithLifecycle
 import kotlinx.coroutines.flow.distinctUntilChanged
 import kotlinx.coroutines.flow.map
 import org.jellyfin.androidtv.ui.browsing.DestinationFragmentView
-import org.jellyfin.androidtv.ui.navigation.NavigationAction
 import org.jellyfin.androidtv.ui.navigation.NavigationRepository
 import org.koin.compose.koinInject
 
@@ -23,6 +25,7 @@ fun AppNavigationHost(
 	navigationRepository: NavigationRepository = koinInject(),
 ) {
 	val factory = remember { AppNavigationHostViewFactory() }
+	val lifecycle = LocalLifecycleOwner.current.lifecycle
 
 	val canGoBack by remember {
 		navigationRepository.currentAction.map { navigationRepository.canGoBack }.distinctUntilChanged()
@@ -35,14 +38,11 @@ fun AppNavigationHost(
 		modifier = modifier,
 	)
 
-	LaunchedEffect(Unit) {
-		navigationRepository.currentAction.collect { action ->
-			when (action) {
-				is NavigationAction.NavigateFragment -> factory.view.navigate(action)
-				NavigationAction.GoBack -> factory.view.goBack()
-				NavigationAction.Nothing -> Unit
-			}
-		}
+	LaunchedEffect(navigationRepository, lifecycle) {
+		// Startup can emit a reset while the existing singleTask activity is stopped.
+		// Never commit fragment changes into that background/saved-state host.
+		navigationRepository.currentAction.flowWithLifecycle(lifecycle, Lifecycle.State.RESUMED)
+			.collect { event -> factory.view.handleNavigation(event) }
 	}
 }
 

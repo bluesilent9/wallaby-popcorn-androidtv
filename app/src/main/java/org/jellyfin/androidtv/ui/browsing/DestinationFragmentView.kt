@@ -15,6 +15,8 @@ import androidx.fragment.app.FragmentManager
 import androidx.fragment.app.FragmentTransaction
 import org.jellyfin.androidtv.R
 import org.jellyfin.androidtv.ui.navigation.NavigationAction
+import org.jellyfin.androidtv.ui.navigation.NavigationDelivery
+import org.jellyfin.androidtv.ui.navigation.NavigationEvent
 import org.jellyfin.androidtv.util.createBundle
 import timber.log.Timber
 import java.util.Stack
@@ -40,7 +42,7 @@ private class HistoryEntry(
 			name = Class.forName(parcel.readString()!!) as Class<out Fragment>,
 			arguments = parcel.readBundle(this::class.java.classLoader)!!,
 			fragment = null,
-			savedState = ParcelCompat.readParcelable(parcel, this::class.java.classLoader, Fragment.SavedState::class.java)!!,
+			savedState = ParcelCompat.readParcelable(parcel, this::class.java.classLoader, Fragment.SavedState::class.java),
 		)
 
 		override fun newArray(size: Int): Array<HistoryEntry?> = arrayOfNulls(size)
@@ -55,6 +57,7 @@ class DestinationFragmentView @JvmOverloads constructor(
 		private const val FRAGMENT_TAG_CONTENT = "content"
 		private const val BUNDLE_SUPER = "super"
 		private const val BUNDLE_HISTORY = "history"
+		private const val BUNDLE_HANDLED_NAVIGATION = "handled_navigation"
 	}
 
 	private val fragmentManager by lazy {
@@ -69,6 +72,15 @@ class DestinationFragmentView @JvmOverloads constructor(
 	}
 
 	private val history = Stack<HistoryEntry>()
+	private val navigationDelivery = NavigationDelivery()
+
+	fun handleNavigation(event: NavigationEvent) = navigationDelivery.deliver(event) { action ->
+		when (action) {
+			is NavigationAction.NavigateFragment -> navigate(action)
+			NavigationAction.GoBack -> goBack()
+			NavigationAction.Nothing -> Unit
+		}
+	}
 
 	fun navigate(action: NavigationAction.NavigateFragment) {
 		val entry = HistoryEntry(action.destination.fragment.java, action.destination.arguments)
@@ -120,7 +132,7 @@ class DestinationFragmentView @JvmOverloads constructor(
 		if (history.isEmpty()) return
 
 		// Update the top-most history entry with state from current fragment
-		val fragment = requireNotNull(fragmentManager.findFragmentByTag(FRAGMENT_TAG_CONTENT))
+		val fragment = fragmentManager.findFragmentByTag(FRAGMENT_TAG_CONTENT) ?: return
 		history[history.size - 1].savedState = fragmentManager.saveFragmentInstanceState(fragment)
 	}
 
@@ -174,6 +186,7 @@ class DestinationFragmentView @JvmOverloads constructor(
 		return createBundle {
 			putParcelable(BUNDLE_SUPER, super.onSaveInstanceState())
 			putParcelableArrayList(BUNDLE_HISTORY, ArrayList(history))
+			putString(BUNDLE_HANDLED_NAVIGATION, navigationDelivery.lastHandledId)
 		}
 	}
 
@@ -187,6 +200,7 @@ class DestinationFragmentView @JvmOverloads constructor(
 		super.onRestoreInstanceState(parent)
 
 		// Restore history
+		navigationDelivery.lastHandledId = state.getString(BUNDLE_HANDLED_NAVIGATION)
 		val savedHistory = BundleCompat.getParcelableArrayList(state, BUNDLE_HISTORY, HistoryEntry::class.java)
 		if (savedHistory != null) {
 			history.clear()

@@ -19,8 +19,6 @@ import org.jellyfin.androidtv.ssh.SshServerAddress
 import java.io.ByteArrayOutputStream
 import java.io.File
 import java.io.IOException
-import java.net.InetAddress
-import java.net.ServerSocket
 import java.net.Socket
 import java.nio.charset.StandardCharsets
 import java.security.KeyStore
@@ -90,7 +88,7 @@ class SshTunnelManager(private val context: Context) {
         val currentSession = session ?: return null
         val port = localPort ?: return null
         if (!currentSession.isConnected || activeAddress != address) return null
-        return "http://127.0.0.1:$port"
+        return SshTunnelEndpoint.url(port)
     }
 
     fun currentEndpoint(address: String): String? {
@@ -119,34 +117,43 @@ class SshTunnelManager(private val context: Context) {
         var observedKey = false
         var lastProbe: Session? = null
         var lastFailure: Throwable? = null
-        for (algorithm in algorithms) {
-            val probe = JSch().getSession(address.username, address.hostname, address.port)
-            probe.setSocketFactory(DualStackSocketFactory(SSH_CONNECT_TIMEOUT_MS, addressResolver::resolve))
-            lastProbe = probe
-            try {
-                probe.setConfig("StrictHostKeyChecking", "no")
-                probe.setHostKeyRepository(ProbeHostKeyRepository)
-                probe.setConfig("PreferredAuthentications", "none")
-                probe.setConfig("server_host_key", algorithm)
-                probe.setTimeout(SSH_CONNECT_TIMEOUT_MS)
-                val probeResult = runCatching { probe.connect(SSH_CONNECT_TIMEOUT_MS) }
-                lastFailure = probeResult.exceptionOrNull()
-                val hostKey = probe.hostKey ?: continue
-                observedKey = true
-                val identity = SshHostKeyIdentity(fingerprint(Base64.decode(hostKey.key, Base64.DEFAULT)), algorithm)
-                if (expected == null) return@withContext identity
-                if (expected == identity.fingerprint) {
-                    // Older app versions pinned only the fingerprint. Remember which server key matched it
-                    // so future connections keep using that same key when the server offers several.
-                    preferences.edit().putString(hostKeyAlgorithmKey(address), algorithm).apply()
-                    return@withContext identity
+        val endpoints = try { orderedSshAddresses(addressResolver.resolve(address.hostname).asIterable()) }
+        catch (error: Exception) { throw classify(null, error) }
+        for (endpoint in endpoints) {
+            for (algorithm in algorithms) {
+                val probe = JSch().getSession(address.username, address.hostname, address.port)
+                probe.setSocketFactory(DualStackSocketFactory(SSH_CONNECT_TIMEOUT_MS, { arrayOf(endpoint) }))
+                lastProbe = probe
+                try {
+                    probe.setConfig("StrictHostKeyChecking", "no")
+                    probe.setHostKeyRepository(ProbeHostKeyRepository)
+                    probe.setConfig("PreferredAuthentications", "none")
+                    probe.setConfig("server_host_key", algorithm)
+                    probe.setTimeout(SSH_CONNECT_TIMEOUT_MS)
+                    val probeResult = runCatching { probe.connect(SSH_CONNECT_TIMEOUT_MS) }
+                    lastFailure = probeResult.exceptionOrNull()
+                    val hostKey = probe.hostKey
+                    if (hostKey == null) {
+                        // Do not retry every host-key algorithm when this address has no route.
+                        if (classify(probe, lastFailure).failure in setOf(SshFailure.TIMEOUT, SshFailure.NETWORK_UNREACHABLE, SshFailure.CONNECTION_REFUSED, SshFailure.CONNECTION_LOST)) break
+                        continue
+                    }
+                    observedKey = true
+                    val identity = SshHostKeyIdentity(fingerprint(Base64.decode(hostKey.key, Base64.DEFAULT)), algorithm)
+                    if (expected == null) return@withContext identity
+                    if (expected == identity.fingerprint) {
+                        // Older app versions pinned only the fingerprint. Remember which server key matched it
+                        // so future connections keep using that same key when the server offers several.
+                        preferences.edit().putString(hostKeyAlgorithmKey(address), algorithm).apply()
+                        return@withContext identity
+                    }
+                } finally {
+                    probe.disconnect()
                 }
-            } finally {
-                probe.disconnect()
             }
-        }
-        if (observedKey && expected != null) {
-            throw SshTunnelException(SshFailure.HOST_KEY_CHANGED, "The SSH server host key changed. Verify it with the server administrator before reconnecting.")
+            if (observedKey && expected != null) {
+                throw SshTunnelException(SshFailure.HOST_KEY_CHANGED, "The SSH server host key changed. Verify it with the server administrator before reconnecting.")
+            }
         }
         throw classify(lastProbe, lastFailure)
     }
@@ -232,13 +239,12 @@ class SshTunnelManager(private val context: Context) {
         var forwardingFailure: JSchException? = null
         repeat(3) {
             if (forwardedPort != null) return@repeat
-            val candidate = ServerSocket(0, 1, InetAddress.getByName("127.0.0.1")).use(ServerSocket::getLocalPort)
             try {
-                connected.setPortForwardingL("127.0.0.1", candidate, "127.0.0.1", 8096)
-                forwardedPort = candidate
+                // JSch allocates and returns the ephemeral port while holding the listener.
+                forwardedPort = connected.setPortForwardingL(SshTunnelEndpoint.LOOPBACK, 0, SshTunnelEndpoint.LOOPBACK, SshTunnelEndpoint.JELLYFIN_PORT)
             } catch (error: JSchException) {
                 forwardingFailure = error
-                // A local race can consume the probed port; try a new OS-assigned port.
+                // Retry a transient listener failure without enabling an IPv4 loopback fallback.
             }
         }
         val port = forwardedPort ?: run {
@@ -248,7 +254,7 @@ class SshTunnelManager(private val context: Context) {
         session = connected
         localPort = port
         activeAddress = address
-        return "http://127.0.0.1:$port"
+        return SshTunnelEndpoint.url(port)
     }
 
     private fun connect(
@@ -257,22 +263,24 @@ class SshTunnelManager(private val context: Context) {
         password: ByteArray? = null,
         jsch: JSch = JSch(),
     ): Session {
-        val ssh = jsch.getSession(address.username, address.hostname, address.port)
-        ssh.setSocketFactory(DualStackSocketFactory(SSH_CONNECT_TIMEOUT_MS, addressResolver::resolve))
-        ssh.setHostKeyRepository(PinnedHostKeyRepository(pin))
-        ssh.setConfig("StrictHostKeyChecking", "yes")
-        ssh.setConfig("PreferredAuthentications", if (password != null) "password" else "publickey")
-        preferences.getString(hostKeyAlgorithmKey(address), null)?.let { ssh.setConfig("server_host_key", it) }
-        ssh.setServerAliveInterval(SSH_AUTH_TIMEOUT_SECONDS * 1_000)
-        ssh.setServerAliveCountMax(SSH_KEEPALIVE_COUNT)
-        ssh.setTimeout(SSH_CONNECT_TIMEOUT_MS)
-        if (password != null) ssh.setPassword(password)
-        return try {
-            ssh.connect(SSH_CONNECT_TIMEOUT_MS)
-            ssh
-        } catch (exception: Exception) {
-            ssh.disconnect()
-            throw exception
+        return connectSshTransport(addressResolver.resolve(address.hostname).asIterable()) { endpoint ->
+            val ssh = jsch.getSession(address.username, address.hostname, address.port)
+            ssh.setSocketFactory(DualStackSocketFactory(SSH_CONNECT_TIMEOUT_MS, { arrayOf(endpoint) }))
+            ssh.setHostKeyRepository(PinnedHostKeyRepository(pin))
+            ssh.setConfig("StrictHostKeyChecking", "yes")
+            ssh.setConfig("PreferredAuthentications", if (password != null) "password" else "publickey")
+            preferences.getString(hostKeyAlgorithmKey(address), null)?.let { ssh.setConfig("server_host_key", it) }
+            ssh.setServerAliveInterval(SSH_AUTH_TIMEOUT_SECONDS * 1_000)
+            ssh.setServerAliveCountMax(SSH_KEEPALIVE_COUNT)
+            ssh.setTimeout(SSH_CONNECT_TIMEOUT_MS)
+            if (password != null) ssh.setPassword(password)
+            try {
+                ssh.connect(SSH_CONNECT_TIMEOUT_MS)
+                ssh
+            } catch (exception: Exception) {
+                ssh.disconnect()
+                throw exception
+            }
         }
     }
 
